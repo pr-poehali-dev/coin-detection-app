@@ -1,22 +1,30 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import Icon from "@/components/ui/icon";
+import { useOnnxModel, Detection } from "@/hooks/useOnnxModel";
 
 type Mode = "idle" | "photo" | "video" | "preview-photo" | "preview-video";
 
 export default function Index() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const rafRef = useRef<number>(0);
+  const inferringRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>("idle");
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [camError, setCamError] = useState<string | null>(null);
+  const [detections, setDetections] = useState<Detection[]>([]);
+
+  const { loadModel, runInference, modelLoaded, loading: modelLoading, modelError } = useOnnxModel();
 
   const stopStream = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -24,7 +32,7 @@ export default function Index() {
   }, []);
 
   const startCamera = useCallback(async (forVideo = false) => {
-    setError(null);
+    setCamError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
@@ -33,35 +41,105 @@ export default function Index() {
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play();
       }
     } catch {
-      setError("Нет доступа к камере. Разрешите доступ в настройках браузера.");
+      setCamError("Нет доступа к камере. Разрешите доступ в настройках браузера.");
     }
   }, []);
 
+  // Live inference loop
+  useEffect(() => {
+    if ((mode !== "photo" && mode !== "video") || !modelLoaded) return;
+
+    const loop = async () => {
+      const video = videoRef.current;
+      const overlay = overlayCanvasRef.current;
+      if (!video || !overlay || video.readyState < 2) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      const W = video.videoWidth;
+      const H = video.videoHeight;
+      if (W === 0 || H === 0) {
+        rafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      overlay.width = W;
+      overlay.height = H;
+
+      if (!inferringRef.current) {
+        inferringRef.current = true;
+        try {
+          const dets = await runInference(video, W, H);
+          setDetections(dets);
+          const ctx = overlay.getContext("2d");
+          if (ctx) {
+            ctx.clearRect(0, 0, W, H);
+            for (const d of dets) {
+              ctx.strokeStyle = "#facc15";
+              ctx.lineWidth = 2.5;
+              ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+              ctx.fillStyle = "rgba(250,204,21,0.12)";
+              ctx.fillRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+            }
+          }
+        } finally {
+          inferringRef.current = false;
+        }
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    };
+
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [mode, modelLoaded, runInference]);
+
   const handlePhoto = useCallback(async () => {
     setMode("photo");
+    setDetections([]);
     await startCamera(false);
   }, [startCamera]);
 
   const handleVideo = useCallback(async () => {
     setMode("video");
+    setDetections([]);
     await startCamera(true);
   }, [startCamera]);
 
-  const takePhoto = useCallback(() => {
-    if (!videoRef.current || !canvasRef.current) return;
+  const takePhoto = useCallback(async () => {
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0);
+    const canvas = captureCanvasRef.current;
+    const overlay = overlayCanvasRef.current;
+    if (!video || !canvas) return;
+
+    const W = video.videoWidth;
+    const H = video.videoHeight;
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(video, 0, 0);
+    if (overlay) ctx.drawImage(overlay, 0, 0);
+
+    if (detections.length > 0) {
+      const label = `Монет: ${detections.length}`;
+      ctx.font = `bold ${Math.round(H * 0.04)}px Golos Text, sans-serif`;
+      const tw = ctx.measureText(label).width;
+      const pad = 14;
+      const bh = Math.round(H * 0.06);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(W / 2 - tw / 2 - pad, H - bh - 16, tw + pad * 2, bh);
+      ctx.fillStyle = "#facc15";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, W / 2, H - 16 - bh / 2);
+    }
+
     const url = canvas.toDataURL("image/jpeg", 0.92);
     setPhotoUrl(url);
     stopStream();
     setMode("preview-photo");
-  }, [stopStream]);
+  }, [detections, stopStream]);
 
   const startRecording = useCallback(() => {
     if (!streamRef.current) return;
@@ -91,7 +169,7 @@ export default function Index() {
     if (!photoUrl) return;
     const a = document.createElement("a");
     a.href = photoUrl;
-    a.download = `photo_${Date.now()}.jpg`;
+    a.download = `coins_${Date.now()}.jpg`;
     a.click();
   }, [photoUrl]);
 
@@ -99,7 +177,7 @@ export default function Index() {
     if (!videoUrl) return;
     const a = document.createElement("a");
     a.href = videoUrl;
-    a.download = `video_${Date.now()}.webm`;
+    a.download = `coins_${Date.now()}.webm`;
     a.click();
   }, [videoUrl]);
 
@@ -109,23 +187,56 @@ export default function Index() {
     setPhotoUrl(null);
     setVideoUrl(null);
     setIsRecording(false);
-    setError(null);
+    setCamError(null);
+    setDetections([]);
   }, [stopStream]);
+
+  const handleModelFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) loadModel(file);
+    },
+    [loadModel]
+  );
+
+  const isCameraMode = mode === "photo" || mode === "video";
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <span className="app-logo">LENS</span>
-        {mode !== "idle" && (
-          <button className="btn-ghost" onClick={reset}>
-            <Icon name="X" size={20} />
-          </button>
-        )}
+        <div className="header-right">
+          <label className={`model-btn ${modelLoaded ? "model-btn--ok" : ""}`}>
+            {modelLoading ? (
+              <Icon name="Loader" size={14} />
+            ) : modelLoaded ? (
+              <Icon name="CheckCircle" size={14} />
+            ) : (
+              <Icon name="Upload" size={14} />
+            )}
+            <span>{modelLoaded ? "Модель загружена" : "Загрузить модель"}</span>
+            <input type="file" accept=".onnx" className="hidden" onChange={handleModelFile} />
+          </label>
+          {mode !== "idle" && (
+            <button className="btn-ghost" onClick={reset}>
+              <Icon name="X" size={20} />
+            </button>
+          )}
+        </div>
       </header>
 
+      {modelError && <p className="error-msg model-error">{modelError}</p>}
+
       <main className="app-main">
+        {/* IDLE */}
         {mode === "idle" && (
           <div className="idle-screen">
+            {!modelLoaded && (
+              <div className="model-hint">
+                <Icon name="Info" size={15} />
+                <span>Загрузите .onnx модель для распознавания монет</span>
+              </div>
+            )}
             <p className="idle-hint">Выберите режим съёмки</p>
             <div className="action-grid">
               <button className="action-card" onClick={handlePhoto}>
@@ -143,14 +254,16 @@ export default function Index() {
                 <span className="action-sub">записать видео</span>
               </button>
             </div>
-            {error && <p className="error-msg">{error}</p>}
+            {camError && <p className="error-msg">{camError}</p>}
           </div>
         )}
 
-        {(mode === "photo" || mode === "video") && (
+        {/* CAMERA */}
+        {isCameraMode && (
           <div className="camera-screen">
             <div className="viewfinder">
               <video ref={videoRef} className="camera-feed" playsInline muted />
+              <canvas ref={overlayCanvasRef} className="overlay-canvas" />
               <div className="vf-corners">
                 <span /><span /><span /><span />
               </div>
@@ -161,7 +274,15 @@ export default function Index() {
                 </div>
               )}
             </div>
-            {error && <p className="error-msg">{error}</p>}
+
+            {camError && <p className="error-msg">{camError}</p>}
+
+            <div className="coin-counter">
+              <Icon name="Coins" size={17} />
+              <span>Монет: <strong>{detections.length}</strong></span>
+              {!modelLoaded && <span className="counter-hint">(нет модели)</span>}
+            </div>
+
             <div className="shutter-bar">
               {mode === "photo" && (
                 <button className="shutter-btn" onClick={takePhoto}>
@@ -182,6 +303,7 @@ export default function Index() {
           </div>
         )}
 
+        {/* PHOTO PREVIEW */}
         {mode === "preview-photo" && photoUrl && (
           <div className="preview-screen">
             <div className="preview-wrap">
@@ -199,6 +321,7 @@ export default function Index() {
           </div>
         )}
 
+        {/* VIDEO PREVIEW */}
         {mode === "preview-video" && videoUrl && (
           <div className="preview-screen">
             <div className="preview-wrap">
@@ -217,7 +340,7 @@ export default function Index() {
         )}
       </main>
 
-      <canvas ref={canvasRef} className="hidden" />
+      <canvas ref={captureCanvasRef} className="hidden" />
     </div>
   );
 }
