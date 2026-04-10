@@ -10,7 +10,6 @@ export interface Detection {
 }
 
 const INPUT_SIZE = 320;
-const CONF_THRESHOLD = 0.4;
 const IOU_THRESHOLD = 0.45;
 
 function iou(a: Detection, b: Detection): number {
@@ -55,7 +54,7 @@ function preprocessImage(source: HTMLCanvasElement | HTMLImageElement | HTMLVide
 }
 
 // Parse YOLOv8 output: shape [1, 5, N] or [1, N, 5]
-function parseOutput(output: ort.Tensor, origW: number, origH: number): Detection[] {
+function parseOutput(output: ort.Tensor, origW: number, origH: number, confThreshold: number): Detection[] {
   const data = output.data as Float32Array;
   const dims = output.dims;
   const dets: Detection[] = [];
@@ -69,7 +68,7 @@ function parseOutput(output: ort.Tensor, origW: number, origH: number): Detectio
       const w  = data[2 * N + i];
       const h  = data[3 * N + i];
       const score = data[4 * N + i];
-      if (score < CONF_THRESHOLD) continue;
+      if (score < confThreshold) continue;
       dets.push({
         x1: ((cx - w / 2) / INPUT_SIZE) * origW,
         y1: ((cy - h / 2) / INPUT_SIZE) * origH,
@@ -89,7 +88,7 @@ function parseOutput(output: ort.Tensor, origW: number, origH: number): Detectio
       const w  = data[base + 2];
       const h  = data[base + 3];
       const score = data[base + 4];
-      if (score < CONF_THRESHOLD) continue;
+      if (score < confThreshold) continue;
       dets.push({
         x1: ((cx - w / 2) / INPUT_SIZE) * origW,
         y1: ((cy - h / 2) / INPUT_SIZE) * origH,
@@ -130,7 +129,8 @@ export function useOnnxModel() {
     async (
       source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement,
       origW: number,
-      origH: number
+      origH: number,
+      confThreshold: number = 0.4
     ): Promise<Detection[]> => {
       if (!sessionRef.current) return [];
       const inputData = preprocessImage(source);
@@ -138,7 +138,7 @@ export function useOnnxModel() {
       const inputName = sessionRef.current.inputNames[0];
       const results = await sessionRef.current.run({ [inputName]: tensor });
       const outputName = sessionRef.current.outputNames[0];
-      return parseOutput(results[outputName], origW, origH);
+      return parseOutput(results[outputName], origW, origH, confThreshold);
     },
     []
   );

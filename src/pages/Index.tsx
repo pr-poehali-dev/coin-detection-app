@@ -20,6 +20,7 @@ export default function Index() {
   const [isRecording, setIsRecording] = useState(false);
   const [camError, setCamError] = useState<string | null>(null);
   const [detections, setDetections] = useState<Detection[]>([]);
+  const [confThreshold, setConfThreshold] = useState(0.4);
 
   const { loadModel, runInference, modelLoaded, loading: modelLoading, modelError } = useOnnxModel();
 
@@ -71,7 +72,7 @@ export default function Index() {
       if (!inferringRef.current) {
         inferringRef.current = true;
         try {
-          const dets = await runInference(video, W, H);
+          const dets = await runInference(video, W, H, confThreshold);
           setDetections(dets);
           const ctx = overlay.getContext("2d");
           if (ctx) {
@@ -93,7 +94,7 @@ export default function Index() {
 
     rafRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [mode, modelLoaded, runInference]);
+  }, [mode, modelLoaded, runInference, confThreshold]);
 
   const handlePhoto = useCallback(async () => {
     setMode("photo");
@@ -282,6 +283,25 @@ export default function Index() {
               <span>Монет: <strong>{detections.length}</strong></span>
               {!modelLoaded && <span className="counter-hint">(нет модели)</span>}
             </div>
+
+            {modelLoaded && (
+              <div className="conf-bar">
+                <span className="conf-label">
+                  <Icon name="SlidersHorizontal" size={13} />
+                  Уверенность
+                </span>
+                <input
+                  type="range"
+                  className="conf-slider"
+                  min={0.05}
+                  max={0.95}
+                  step={0.05}
+                  value={confThreshold}
+                  onChange={(e) => setConfThreshold(Number(e.target.value))}
+                />
+                <span className="conf-value">{Math.round(confThreshold * 100)}%</span>
+              </div>
+            )}
 
             <div className="shutter-bar">
               {mode === "photo" && (
