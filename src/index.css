@@ -446,6 +446,17 @@
   color: #4ade80;
 }
 
+.model-btn--loading {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.model-loaded-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .model-hint {
   display: flex;
   align-items: center;

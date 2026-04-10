@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import Icon from "@/components/ui/icon";
 import { useOnnxModel, Detection } from "@/hooks/useOnnxModel";
+import { saveModelToDB, loadModelFromDB, deleteModelFromDB } from "@/hooks/useModelStorage";
 
 type Mode = "idle" | "photo" | "video" | "preview-photo" | "preview-video";
 
@@ -21,8 +22,18 @@ export default function Index() {
   const [camError, setCamError] = useState<string | null>(null);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [confThreshold, setConfThreshold] = useState(0.4);
+  const [autoLoading, setAutoLoading] = useState(true);
 
-  const { loadModel, runInference, modelLoaded, loading: modelLoading, modelError } = useOnnxModel();
+  const { loadModel, loadModelFromBuffer, runInference, modelLoaded, loading: modelLoading, modelError } = useOnnxModel();
+
+  // Автозагрузка из IndexedDB при старте
+  useEffect(() => {
+    loadModelFromDB()
+      .then((buffer) => {
+        if (buffer) return loadModelFromBuffer(buffer);
+      })
+      .finally(() => setAutoLoading(false));
+  }, [loadModelFromBuffer]);
 
   const stopStream = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -193,12 +204,20 @@ export default function Index() {
   }, [stopStream]);
 
   const handleModelFile = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (file) loadModel(file);
+      if (!file) return;
+      const buffer = await file.arrayBuffer();
+      await saveModelToDB(buffer);
+      await loadModelFromBuffer(buffer);
     },
-    [loadModel]
+    [loadModelFromBuffer]
   );
+
+  const handleForgetModel = useCallback(async () => {
+    await deleteModelFromDB();
+    window.location.reload();
+  }, []);
 
   const isCameraMode = mode === "photo" || mode === "video";
 
@@ -207,17 +226,29 @@ export default function Index() {
       <header className="app-header">
         <span className="app-logo">LENS</span>
         <div className="header-right">
-          <label className={`model-btn ${modelLoaded ? "model-btn--ok" : ""}`}>
-            {modelLoading ? (
-              <Icon name="Loader" size={14} />
-            ) : modelLoaded ? (
-              <Icon name="CheckCircle" size={14} />
-            ) : (
-              <Icon name="Upload" size={14} />
-            )}
-            <span>{modelLoaded ? "Модель загружена" : "Загрузить модель"}</span>
-            <input type="file" accept=".onnx" className="hidden" onChange={handleModelFile} />
-          </label>
+          {modelLoaded ? (
+            <div className="model-loaded-group">
+              <span className="model-btn model-btn--ok">
+                <Icon name="CheckCircle" size={14} />
+                <span>Модель загружена</span>
+              </span>
+              <button className="btn-ghost" title="Удалить модель" onClick={handleForgetModel}>
+                <Icon name="Trash2" size={15} />
+              </button>
+            </div>
+          ) : (
+            <label className={`model-btn ${(modelLoading || autoLoading) ? "model-btn--loading" : ""}`}>
+              {(modelLoading || autoLoading) ? (
+                <Icon name="Loader" size={14} />
+              ) : (
+                <Icon name="Upload" size={14} />
+              )}
+              <span>{(modelLoading || autoLoading) ? "Загрузка..." : "Загрузить модель"}</span>
+              {!modelLoading && !autoLoading && (
+                <input type="file" accept=".onnx" className="hidden" onChange={handleModelFile} />
+              )}
+            </label>
+          )}
           {mode !== "idle" && (
             <button className="btn-ghost" onClick={reset}>
               <Icon name="X" size={20} />

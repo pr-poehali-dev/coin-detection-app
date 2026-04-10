@@ -108,22 +108,38 @@ export function useOnnxModel() {
   const [loading, setLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
 
+  const initSession = useCallback(async (buffer: ArrayBuffer) => {
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/";
+    sessionRef.current = await ort.InferenceSession.create(buffer, {
+      executionProviders: ["wasm"],
+    });
+    setModelLoaded(true);
+  }, []);
+
   const loadModel = useCallback(async (file: File) => {
     setLoading(true);
     setModelError(null);
     try {
-      ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/";
       const buffer = await file.arrayBuffer();
-      sessionRef.current = await ort.InferenceSession.create(buffer, {
-        executionProviders: ["wasm"],
-      });
-      setModelLoaded(true);
+      await initSession(buffer);
     } catch (e: unknown) {
       setModelError("Не удалось загрузить модель: " + (e instanceof Error ? e.message : String(e)));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initSession]);
+
+  const loadModelFromBuffer = useCallback(async (buffer: ArrayBuffer) => {
+    setLoading(true);
+    setModelError(null);
+    try {
+      await initSession(buffer);
+    } catch (e: unknown) {
+      setModelError("Не удалось загрузить модель: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setLoading(false);
+    }
+  }, [initSession]);
 
   const runInference = useCallback(
     async (
@@ -143,5 +159,5 @@ export function useOnnxModel() {
     []
   );
 
-  return { loadModel, runInference, modelLoaded, loading, modelError };
+  return { loadModel, loadModelFromBuffer, runInference, modelLoaded, loading, modelError };
 }
