@@ -1,0 +1,19 @@
+{
+  "name": "LENS — Детектор монет",
+  "short_name": "LENS",
+  "description": "Распознавание монет через камеру с помощью ИИ",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f0f0f",
+  "theme_color": "#0f0f0f",
+  "icons": [
+    {
+      "src": "https://cdn.poehali.dev/projects/4aee2010-64e3-4f23-ba92-e561d5c05b66/files/162e3fc0-36b7-4e50-a6ea-b294fdefb5cd.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "productivity"]
+}
